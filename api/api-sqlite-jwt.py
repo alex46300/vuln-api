@@ -1,11 +1,34 @@
 import flask
-import pymysql
 from flask import request, jsonify
-from flaskext.mysql import MySQL
+# from flaskext.mysql import MySQL
 from flask_jwt import JWT, jwt_required
 from werkzeug.security import safe_str_cmp
 from flasgger import Swagger
 
+# SQLITE3 setup for Flask
+import sqlite3 as sql
+
+app = flask.Flask(__name__)
+app.config["DEBUG"] = True
+app.config['SECRET_KEY'] = 'super-secret'
+jwt = JWT(app, authenticate, identity)
+
+"""
+curl -d '{"username": "admin", "password":"admin"}' -H 'Content-Type: application/json' http://127.0.0.1:5000/auth -v
+{
+  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZGVudGl0eSI6MiwiaWF0IjoxNjAxNzM2MjAyLCJuYmYiOjE2MDE3MzYyMDIsImV4cCI6MTYwMTczNjUwMn0.ywAwJEayJOOZ2s1Kk7y40n_v3rRX8H-2TYSM1hYXxRA"
+}
+
+curl http://127.0.0.1:5000/api/v1/resources/todos -v
+curl -H 'Content-Type: application/json' -H 'Authorization: JWT eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZGVudGl0eSI6MiwiaWF0IjoxNjAxNzUxMDY2LCJuYmYiOjE2MDE3NTEwNjYsImV4cCI6MTYwMTc1MTM2Nn0._5KmYgv2Alpp7OzDp_SvpZg7y5N7Lw6vV6Lm_o7aqgc' http://127.0.0.1:5000/api/v1/resources/todos
+
+
+curl -d '{"username": "admin", "password":"admin"}' -H 'Content-Type: application/json' http://127.0.0.1:5000/auth -v
+
+curl http://127.0.0.1:5000/api/v1/resources/todos -v
+"""
+
+DATABASE = 'todos.db'
 
 class User(object):
     def __init__(self, id, username, password):
@@ -35,47 +58,15 @@ def identity(payload):
     return userid_table.get(user_id, None)
 
 
-app = flask.Flask(__name__)
-app.config["DEBUG"] = True
-app.config['SECRET_KEY'] = 'super-secret'
-# jwt = JWT(app, authenticate, identity)
-
-"""
-
-curl -d '{"username": "admin", "password":"admin"}' -H 'Content-Type: application/json' http://127.0.0.1:5000/auth -v
-{
-  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZGVudGl0eSI6MiwiaWF0IjoxNjAxNzM2MjAyLCJuYmYiOjE2MDE3MzYyMDIsImV4cCI6MTYwMTczNjUwMn0.ywAwJEayJOOZ2s1Kk7y40n_v3rRX8H-2TYSM1hYXxRA"
-}
-
-curl http://127.0.0.1:5000/api/v1/resources/todos -v
-curl -H 'Content-Type: application/json' -H 'Authorization: JWT eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZGVudGl0eSI6MiwiaWF0IjoxNjAxNzUxMDY2LCJuYmYiOjE2MDE3NTEwNjYsImV4cCI6MTYwMTc1MTM2Nn0._5KmYgv2Alpp7OzDp_SvpZg7y5N7Lw6vV6Lm_o7aqgc' http://127.0.0.1:5000/api/v1/resources/todos
-
-
-curl -d '{"username": "admin", "password":"admin"}' -H 'Content-Type: application/json' http://127.0.0.1:5000/auth -v
-
-curl http://127.0.0.1:5000/api/v1/resources/todos -v
-"""
-
 swagger = Swagger(app)
 
-mysql = MySQL()
-
-# MySQL configurations
-app.config['MYSQL_DATABASE_HOST'] = 'db'
-app.config['MYSQL_DATABASE_USER'] = 'root'
-app.config['MYSQL_DATABASE_PASSWORD'] = 'root'
-app.config['MYSQL_DATABASE_DB'] = 'vulnapi'
-
-mysql.init_app(app)
-
-con = mysql.connect()
 
 @app.route('/', methods=['GET'])
 def home():
     return "<h1>Practical DevSecOps TODOs API</h1>"
 
 @app.route('/api/v1/resources/todos', methods=['GET'])
-# @jwt_required()
+@jwt_required()
 def get_all_todos():
     """Returns a list of todo item
     ---
@@ -93,10 +84,12 @@ def get_all_todos():
       404:
         description: "todo item not found"
     """
-    cursor = con.cursor(pymysql.cursors.DictCursor)
-    cursor.execute("SELECT * from todos")
-    todos = cursor.fetchall()
-    cursor.close()
+    with sql.connect("todos.db") as con:
+        cursor = con.cursor()
+        cursor.execute("SELECT * from todos")
+        todos = cursor.fetchall()
+        cursor.close()
+
     return jsonify(todos), 200
 
 @app.route('/api/v1/resources/todos/<string:id>', methods=['GET'])
@@ -144,10 +137,11 @@ def get_todo(id):
         error = {"Error": "No id found. Please specify an id."}
         return jsonify(error), 404
     """
-    cursor = con.cursor(pymysql.cursors.DictCursor)
-    cursor.execute("SELECT * from todos where id="+str(id))
-    todo = cursor.fetchone()
-    cursor.close()
+    with sql.connect("todos.db") as con:
+        cursor = con.cursor()
+        cursor.execute("SELECT * from todos where id="+str(id))
+        todo = cursor.fetchone()
+        cursor.close()
     return jsonify(todo), 200
 
 @app.route('/api/v1/resources/todos', methods=['POST'])
@@ -173,12 +167,16 @@ def add_todo():
     """
     todo = request.get_json()
     print(todo)
-    cursor = con.cursor(pymysql.cursors.DictCursor)
-    query = "INSERT INTO todos(user, todo, date) VALUES(%s, %s, %s)"
-    values = (todo['user'], todo['todo'], todo['date'])
-    cursor.execute(query, values)
-    con.commit()
-    cursor.close()
+
+    query = "INSERT INTO todos(user, todo, date) VALUES('{}','{}', '{}')".format(todo['user'], todo['todo'], todo['date'])
+    print(query)
+
+    with sql.connect("todos.db") as con:
+        cursor = con.cursor()
+        cursor.execute(query)
+        con.commit()
+        cursor.close()
+
     return jsonify(todo), 201
 
 @app.route('/api/v1/resources/todos/<string:id>', methods=['PUT'])
@@ -212,17 +210,21 @@ def update_todo(id):
     """
     todo = request.get_json()
     # print(todo['task'])
-    cursor = con.cursor(pymysql.cursors.DictCursor)
 
     # UPDATE customers SET address = 'Canyon 123',  user=imran WHERE address = 'Valley 345'
-    query = "Update todos set user=%s, todo=%s, date=%s where id=%s"
-    data = (todo['user'], todo['todo'], todo['date'], str(id))
-    cursor.execute(query, data)
-    con.commit()
+    query = "UPDATE todos set user='{}', todo='{}', date='{}' WHERE id={}".format(todo['user'], todo['todo'], todo['date'], id)
+    # query = "Update todos set user={todo['user']} todo={todo['todo']}, date={todo['date']} where id={id}"
+    print(query)
 
-    cursor.execute("SELECT * from todos where id="+str(id))
-    todo = cursor.fetchone()
-    cursor.close()
+    with sql.connect("todos.db") as con:
+        cursor = con.cursor()
+        cursor.execute(query)
+        con.commit()
+
+        cursor.execute("SELECT * from todos where id="+str(id))
+        todo = cursor.fetchone()
+        cursor.close()
+
     return jsonify(todo), 200
 
 @app.route('/api/v1/resources/todos/<int:id>', methods=['DELETE'])
@@ -246,11 +248,14 @@ def delete_todo(id):
       404:
         description: "Task not found"
     """
-    cursor = con.cursor(pymysql.cursors.DictCursor)
-    cursor.execute("DELETE FROM todos WHERE id="+str(id))
-    print(dir(cursor))
-    con.commit()
-    cursor.close()
+    query = "DELETE FROM todos WHERE id="+str(id)
+    print(query)
+
+    with sql.connect("todos.db") as con:
+        cursor = con.cursor()
+        cursor.execute(query)
+        con.commit()
+        cursor.close()
     message = "Id: " + str(id) + " Deleted"
     json_message = {"message": message}
     return jsonify(json_message), 200
